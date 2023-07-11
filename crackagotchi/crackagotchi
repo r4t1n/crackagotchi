@@ -1,0 +1,74 @@
+#! /bin/python
+
+# CHANGE THESE VARIABLES TO YOUR VALUES!!!
+pwnagotchi_password = "Aqx65gcg*"
+pwnagotchi_handshake_location = "/home/pi/handshakes/"
+local_handshake_location = "./handshakes/"
+hash_location = "./hashes/"
+root_command = "doas"
+
+import subprocess
+import os
+import re
+
+subprocess.run(["mkdir", local_handshake_location, hash_location], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+print(" Checking for interfaces...")
+ifconfig_output = subprocess.check_output("ifconfig").decode("utf-8")
+interfaces = re.findall(r"^([^\s:]+):", ifconfig_output, re.MULTILINE)
+selected_interface = None
+
+for i, interface in enumerate(interfaces, 1):
+    print(f" {i}: {interface}")
+
+while selected_interface is None:
+    user_input = input(f" Select your pwnagotchi's interface: ")
+    if user_input.isdigit() and int(user_input) in range(1, len(interfaces) + 1):
+        selected_interface = interfaces[int(user_input) - 1]
+        print(f" {selected_interface} selected")
+    else:
+        print(f" {user_input} does not exist")
+
+print(f" Connecting to pwnagotchi on interface {selected_interface}...")
+subprocess.run([root_command, "ifconfig", selected_interface, "10.0.0.1", "netmask", "255.255.255.0"])
+
+ping_output = subprocess.check_output(["ping", "-c", "1", "10.0.0.2"]).decode("utf-8")
+
+while ping_output == "ping: connect: Network is unreachable":
+    subprocess.run([root_command, "ifconfig", selected_interface, "10.0.0.1", "netmask", "255.255.255.0"])
+    ping_output = subprocess.check_output(["ping", "10.0.0.2"]).decode("utf-8")
+    sleep(2)
+else:
+        print(f" Successfully connected to pwnagotchi on interface {selected_interface}!")
+
+print(" Downloading handshakes from pwnagotchi...")
+subprocess.run(["sshpass", "-p", pwnagotchi_password, "scp", f"pi@10.0.0.2:{pwnagotchi_handshake_location}/*", local_handshake_location])
+
+print(" Succesfully downloaded handshakes!")
+
+handshake_files = os.listdir(local_handshake_location)
+hash_files = os.listdir(hash_location)
+invalid_handshakes = []
+
+for handshake_file in handshake_files:
+    if handshake_file.endswith(".pcap"):
+        input_handshake = local_handshake_location + handshake_file
+        hash_output = hash_location + handshake_file.with_suffix(".22000")
+        
+        hcxpcapngtool_output = subprocess.run(["hcxpcapngtool", input_handshake, "-o", hash_output], stdout=subprocess.PIPE, text=True)
+        
+        if "Information: no hashes written to hash files" in hcxpcapngtool_output.stdout:
+            print(f" {handshake_file} has no valid handshake or PMKID")
+            invalid_handshakes.append(handshake_file)
+
+if invalid_handshakes:
+    user_input = input(" Invalid handshakes found. Do you want to delete them? (y/n): ")
+    if user_input.lower() in ["y", "yes"]:
+        for handshake_file in invalid_handshakes:
+            invalid_handshake = local_handshake_location + handshake_file
+            os.remove(invalid_handshake)
+            print(f" Deleted {handshake_file}")
+    else:
+        print(" Invalid handshakes were not deleted")
+else:
+    print(" No invalid handshakes found!")
